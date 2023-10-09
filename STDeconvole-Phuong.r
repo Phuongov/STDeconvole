@@ -1,0 +1,197 @@
+#### simulate ST data:simulating by using 3 cell-types 
+## each with 100 cells and 300 genes with some random baseline 
+## Gaussian noise
+set.seed(0)
+G <- 3 #cell types
+N <- 100 #100 cells
+M <- 300 #300 genes
+initmean <- 10
+initvar <- 10
+mat <- matrix(rnorm(N*M*G, initmean, initvar), M, N*G)
+rownames(mat) <- paste0('gene', 1:M)
+colnames(mat) <- paste0('cell', 1:(N*G))
+ct <- factor(sapply(1:G, function(x) {
+  rep(paste0('ct', x), N)
+}))
+names(ct) <- colnames(mat)
+
+## Visualize heatmap where each row is a gene, each column is a cell
+## Column side color notes the cell-type
+par(mfrow=c(1,1))
+heatmap(mat,
+        Rowv=NA, Colv=NA,
+        col=colorRampPalette(c('blue', 'white', 'red'))(100),
+        scale="none",
+        ColSideColors=rainbow(G)[ct],
+        labCol=FALSE, labRow=FALSE)
+
+## For each cell-type, we upregulate 100 genes by increasing these genes expression 
+## for each cell-type to create differently upregulated genes. We will aslo make these
+## simulated gene expressions possitive coutns.
+set.seed(0)
+upreg <- 100
+upregvar <- 10
+ng <- 100
+diff <- lapply(1:G, function(x) {
+  diff <- rownames(mat)[(((x-1)*ng)+1):(((x-1)*ng)+ng)]
+  mat[diff, ct==paste0('ct', x)] <<-
+    mat[diff, ct==paste0('ct', x)] +
+    rnorm(ng, upreg, upregvar)
+  return(diff)
+})
+names(diff) <- paste0('ct', 1:G)
+
+par(mfrow=c(1,1))
+heatmap(mat,
+        Rowv=NA, Colv=NA,
+        col=colorRampPalette(c('blue', 'white', 'red'))(100),
+        scale="none",
+        ColSideColors=rainbow(G)[ct],
+        labCol=FALSE, labRow=FALSE)
+
+range(mat)
+
+## positive expression only
+mat[mat < 0] <- 0
+## make counts
+mat <- round(mat)
+
+### If we pperform simple principal components dimentionality reduction on these
+## single cell resolution transcriptomic profiles. we get 3 well defined clusters asexpected:
+pcs = prcomp(t(mat))
+
+#plot PC1 and PC2 coloring by cell-type:
+par(mfrow=c(1,1))
+plot(pcs$x[,1:2], col=rainbow(G)[ct], pch=16, main = 'PCA: PC1 vs. PC2')
+
+### Indeed we can perform simple k-means clustering analysis and recover our 3 ground
+## truth cell-type. We can visualize our clustering analysis results by coloring the points
+## (eg. single cells) by their indentified clusters in the reduced dimentional principal components space.
+com = kmeans(t(mat), 3)$cluster
+plot (pcs$x[,1:2], col=rainbow(G, v=0.8)[com], pch=16, main = 'PCA: PC1 vs. PC2')
+##perfect corespond as expected:
+table(com, ct)
+
+### Simulating multi-cellular pixe-resolution spatially resolved transcriptomics data:
+## some spatial resolved transcriptomics tech provide us with pixel-resolution transcriptomucs 
+## profiling of small spots tiled across tissues. As such, the transcriptomic profiles
+## observed at these spots may reflect multiple cells of different cell types. Let's simulate such
+## a multi-sellular pixel-resolution spatially resolved transcriptomics dataset from the single-sell
+## resolution data we just simulated.
+
+# first, use a grid of 30x30 for 900 spots total across the tissue
+
+spotpos <- cbind(unlist(lapply(1:30, function(i) rep(i,30))), 1:30)
+rownames(spotpos) <- paste0('spot-', 1:nrow(spotpos))
+colnames(spotpos) <- c('x','y')
+dim(spotpos)
+
+par(mfrow=c(1,1))
+plot(spotpos, cex=1)
+
+
+## mix 3 cell-types
+ct1 <- names(ct)[ct == 'ct1']
+ct2 <- names(ct)[ct == 'ct2']
+ct3 <- names(ct)[ct == 'ct3']
+
+nmix <- nrow(spotpos)/2
+pct1 <- c(unlist(lapply(rev(1:nmix), function(i) i/nmix)), rep(0,nmix))
+pct2 <- c(rep(0,nmix), unlist(lapply(1:nmix, function(i) i/nmix)))
+pct3 <- 1-(pct1+pct2)
+
+## Show proportion of each cell-type across spots
+par(mfrow=c(3,1), mar=rep(2,4))
+barplot(pct1, ylim=c(0,1), main='proportion ct1')
+barplot(pct2, ylim=c(0,1), main='proportion ct2')
+barplot(pct3, ylim=c(0,1), main='proportion ct3')
+
+pct <- cbind(pct1, pct2, pct3)
+rownames(pct) <- rownames(spotpos)
+## Visualize as pie charts
+STdeconvolve::vizAllTopics(pct, spotpos) +
+  ggplot2::guides(colour = "none")
+
+## assume 10 cells per spot
+ncells <- 10
+## make gene expression matrix
+spotmat <- do.call(cbind, lapply(1:nrow(spotpos), function(i) {
+  spotcells <- c(
+    sample(ct1, pct1[i]*ncells),
+    sample(ct2, pct2[i]*ncells),
+    sample(ct3, pct3[i]*ncells)
+  )
+  rowSums(mat[,spotcells])
+}))
+colnames(spotmat) <- rownames(spotpos)
+
+## simulated ST data
+head(pct)
+head(spotmat)
+dim(spotmat)
+head(spotpos)
+dim(spotpos)
+
+
+#### tweaks to make normalization more prominent
+tweak <- rownames(spotpos)[spotpos[,'y'] %in% seq(1,30,by=2)]
+
+spotmattweak <- spotmat
+spotmattweak[, tweak] <- spotmattweak[, tweak]*5
+colSums(spotmattweak)
+colSums(spotmat)
+
+par(mfrow=c(1,1))
+MERINGUE::plotEmbedding(spotpos, col=colSums(spotmattweak))
+
+
+#### exploring impact of normalization
+
+## what happens if we don't normalize?
+## dimensionality reduction with PCA
+## and clustering with kmeans
+pcs <- prcomp(t(spotmattweak))
+plot(pcs$x[,1:2], pch=16)
+com <- kmeans(pcs$x[,1:3], centers = 3)
+MERINGUE::plotEmbedding(pcs$x[,1:2], groups=com$cluster)
+MERINGUE::plotEmbedding(spotpos, groups=com$cluster)
+
+MERINGUE::plotEmbedding(pcs$x[,1:2], col=colSums(spotmattweak))
+MERINGUE::plotEmbedding(spotpos, col=colSums(spotmattweak))
+
+## what happens if we do normalize?
+spotmattweaknorm <- t(t(spotmattweak)/colSums(spotmattweak))
+spotmattweaknorm <- spotmattweaknorm*1e6
+pcs2 <- prcomp(t(spotmattweaknorm))
+plot(pcs2$x[,1:2], pch=16)
+com2 <- kmeans(pcs2$x[,1:3], centers = 3)
+MERINGUE::plotEmbedding(pcs2$x[,1:2], groups=com2$cluster)
+MERINGUE::plotEmbedding(spotpos, groups=com2$cluster)
+
+table(com$cluster, com2$cluster)
+
+## deconvolution analysis
+## no normalization
+ldas <- fitLDA(t(as.matrix(spotmattweak)), Ks = 3)
+optLDA <- optimalModel(models = ldas, opt = "min")
+results <- getBetaTheta(optLDA, perc.filt = 0.05, betaScale = 1000)
+deconProp <- results$theta
+deconGexp <- results$beta
+## visualize deconvolved cell-type proportions
+vizAllTopics(deconProp, spotpos)
+
+cor(pct, deconProp)
+
+## with normalization
+## requires rounding hack to get counts
+## (not recommended because as you'll see we get the same answer anyway)
+ldas2 <- fitLDA(t(as.matrix(round(spotmattweaknorm))), Ks = 3)
+optLDA2 <- optimalModel(models = ldas2, opt = "min")
+results2 <- getBetaTheta(optLDA2, perc.filt = 0.05, betaScale = 1000)
+deconProp2 <- results2$theta
+deconGexp2 <- results2$beta
+## visualize deconvolved cell-type proportions
+vizAllTopics(deconProp2, spotpos)
+
+cor(pct, deconProp2)
+cor(deconProp, deconProp2)
